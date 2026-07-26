@@ -12,8 +12,54 @@ let isbndbWarnedThisSession = false;
 let lastIsbndbError = null;
 let reviewFilter = false;         // library shows only books needing attention
 let bulkCount = 0;
+let currentScreen = "library";
 
 const $ = (id) => document.getElementById(id);
+
+// ---------- back-button handling ----------
+// Standard installable-app behaviour: the Back button closes whatever overlay
+// is open (scanner or a sheet); if nothing's open, it returns to the Library
+// tab; only from an idle Library does it actually leave the app. Implemented by
+// seeding one buffer history entry and, on each Back, closing the topmost thing
+// and restoring the buffer so we don't fall out of the app mid-task.
+const Nav = (() => {
+  function closeTopOverlay() {
+    if ($("isbndb-alert-backdrop").classList.contains("active")) {
+      $("isbndb-alert-backdrop").classList.remove("active");
+      return true;
+    }
+    if ($("scanner-view").classList.contains("active")) {
+      closeScanner();
+      return true;
+    }
+    const openSheets = Array.from(document.querySelectorAll(".sheet-backdrop.active"));
+    if (openSheets.length) {
+      openSheets[openSheets.length - 1].classList.remove("active");
+      return true;
+    }
+    return false;
+  }
+
+  function handlePop() {
+    if (closeTopOverlay()) {
+      history.pushState({ app: "stackhouse" }, "");   // restore buffer, stay in app
+      return;
+    }
+    if (currentScreen !== "library") {
+      switchScreen("library");
+      history.pushState({ app: "stackhouse" }, "");
+      return;
+    }
+    // idle on Library — allow the app to actually close
+    history.back();
+  }
+
+  function seed() {
+    history.pushState({ app: "stackhouse" }, "");
+    window.addEventListener("popstate", handlePop);
+  }
+  return { seed };
+})();
 
 // a book "needs attention" if it's unreviewed (from bulk) or flagged as a duplicate
 const needsAttention = (b) => !!(b.needsReview || b.possibleDuplicate);
@@ -54,6 +100,7 @@ async function init() {
     syncTimer = setInterval(() => doSync(true), 60000);
   }
   window.addEventListener("online", () => doSync(true));
+  Nav.seed();
 }
 
 async function loadBooks() {
@@ -89,6 +136,7 @@ function switchScreen(name) {
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.screen === name));
   $(`screen-${name}`).classList.add("active");
   $("screen-title").firstChild.textContent = titles[name];
+  currentScreen = name;
   if (name === "settings") refreshSettingsScreen();
 }
 
@@ -477,7 +525,13 @@ async function closeScanner() {
   }
 }
 
-async function onCodeScanned(code) {
+async function onCodeScanned(code, isBook) {
+  if (!isBook) {
+    // Not a Bookland EAN-13 — likely a price add-on, UPC, or a misread.
+    $("scanner-status").textContent = "That's not a book barcode — line up the main barcode (starts 978/979).";
+    if (navigator.vibrate) navigator.vibrate(60);
+    return;
+  }
   if (scanMode === "add") {
     $("scanner-status").textContent = `Found ${code} — looking it up…`;
     await handleAddScan(code);

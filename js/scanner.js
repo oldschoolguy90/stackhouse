@@ -1,14 +1,28 @@
-// Wraps the html5-qrcode library for EAN-13 (book ISBN) barcode scanning.
+// Wraps the html5-qrcode library, restricted to Bookland EAN-13 (book ISBN) codes.
 const Scanner = (() => {
   let instance = null;
   let running = false;
   let lastCode = null;
   let lastAt = 0;
 
+  // A book barcode is a Bookland EAN-13: 13 digits, prefix 978 or 979,
+  // with a valid EAN-13 checksum. This equals the ISBN-13.
+  function isValidBookland(code) {
+    if (!/^\d{13}$/.test(code)) return false;
+    if (!(code.startsWith("978") || code.startsWith("979"))) return false;
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      sum += parseInt(code[i], 10) * (i % 2 === 0 ? 1 : 3);
+    }
+    const check = (10 - (sum % 10)) % 10;
+    return check === parseInt(code[12], 10);
+  }
+
   async function start(elementId, onCode, onError) {
     if (running) return;
     instance = new Html5Qrcode(elementId, {
-      formatsToSupport: [Html5QrcodeSupportFormat.EAN_13, Html5QrcodeSupportFormat.EAN_8, Html5QrcodeSupportFormat.UPC_A],
+      // EAN-13 only: keeps the reader from locking onto price add-ons or UPCs
+      formatsToSupport: [Html5QrcodeSupportFormat.EAN_13],
       verbose: false,
     });
     const config = {
@@ -25,11 +39,10 @@ const Scanner = (() => {
         config,
         (decodedText) => {
           const now = Date.now();
-          // debounce duplicate reads of the same barcode within 2.5s
           if (decodedText === lastCode && now - lastAt < 2500) return;
           lastCode = decodedText;
           lastAt = now;
-          onCode(decodedText);
+          onCode(decodedText, isValidBookland(decodedText));
         },
         () => { /* per-frame decode noise, ignore */ }
       );
@@ -50,7 +63,7 @@ const Scanner = (() => {
     lastCode = null;
   }
 
-  return { start, stop, isRunning: () => running };
+  return { start, stop, isRunning: () => running, isValidBookland };
 })();
 
 // html5-qrcode exposes formats under Html5QrcodeSupportedFormats; alias defensively

@@ -1,4 +1,4 @@
-const CACHE = "stackhouse-v6";
+const CACHE = "stackhouse-v7";
 const ASSETS = [
   "./",
   "./index.html",
