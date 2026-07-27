@@ -339,6 +339,16 @@ button { font-family: inherit; }
 .book-tag.dup { background: rgba(166,61,64,0.12); color: var(--rust); border: 1px solid var(--rust); }
 .book-card.review-flag { border-left-color: var(--brass); border-left-style: dotted; }
 
+/* ---------- OCR capture ---------- */
+#ocr-view { display: none; position: fixed; inset: 0; background: black; z-index: 60; flex-direction: column; }
+#ocr-view.active { display: flex; }
+#ocr-video { width: 100%; height: 100%; object-fit: cover; }
+.ocr-frame {
+  position: absolute; top: 50%; left: 8%; right: 8%; transform: translateY(-50%);
+  height: 70px; border: 2px solid var(--brass); border-radius: 8px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.45); pointer-events: none;
+}
+
 /* ---------- Toast ---------- */
 .isbndb-warn {
   background: rgba(166, 61, 64, 0.1);

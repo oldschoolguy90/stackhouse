@@ -5,6 +5,7 @@ const DropboxSync = (() => {
   const AUTH_URL = "https://www.dropbox.com/oauth2/authorize";
   const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
   const LIBRARY_PATH = "/library.json";
+  const CSV_PATH = "/library.csv";
 
   function redirectUri() {
     return location.origin + location.pathname;
@@ -156,6 +157,59 @@ const DropboxSync = (() => {
     return Array.from(byId.values());
   }
 
+  function csvCell(v) {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    // quote if it contains comma, quote, or newline; double any inner quotes
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function buildCsv(records) {
+    const rows = records.filter((b) => !b.deleted);
+    rows.sort((a, b) =>
+      (a.author || "").localeCompare(b.author || "") ||
+      (a.seriesName || "").localeCompare(b.seriesName || "") ||
+      ((a.seriesPosition || 0) - (b.seriesPosition || 0)) ||
+      (a.title || "").localeCompare(b.title || "")
+    );
+    const headers = ["Title", "Author", "Series", "Position", "ISBN",
+                     "Checked out to", "Status", "Possible duplicate", "Needs review", "Date added"];
+    const lines = [headers.join(",")];
+    for (const b of rows) {
+      const added = b.addedAt ? new Date(b.addedAt).toISOString().slice(0, 10) : "";
+      lines.push([
+        csvCell(b.title),
+        csvCell(b.author),
+        csvCell(b.seriesName),
+        csvCell(b.seriesPosition),
+        csvCell(b.isbn),
+        csvCell(b.checkedOutTo),
+        csvCell(b.checkedOutTo ? "Checked out" : "On shelf"),
+        csvCell(b.possibleDuplicate ? "yes" : ""),
+        csvCell(b.needsReview ? "yes" : ""),
+        csvCell(added),
+      ].join(","));
+    }
+    return lines.join("\r\n");
+  }
+
+  async function uploadCsv(records) {
+    const accessToken = await refreshIfNeeded();
+    // BOM so Excel opens accented titles (e.g. Brontë) correctly
+    const body = "\uFEFF" + buildCsv(records);
+    await fetch("https://content.dropboxapi.com/2/files/upload", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/octet-stream",
+        "Dropbox-API-Arg": JSON.stringify({ path: CSV_PATH, mode: "overwrite", mute: true }),
+      },
+      body,
+    });
+    // CSV is a convenience export; failure here shouldn't break the JSON sync,
+    // so callers ignore its result.
+  }
+
   async function sync() {
     if (!(await isConnected())) return { synced: false };
     const local = await DB.getAllRaw();
@@ -163,6 +217,7 @@ const DropboxSync = (() => {
     const merged = mergeRecords(local, remote);
     await DB.putManyRaw(merged);
     await uploadLibrary(merged);
+    try { await uploadCsv(merged); } catch (_) { /* CSV is best-effort */ }
     await DB.setMeta("lastSyncedAt", Date.now());
     return { synced: true, count: merged.filter((b) => !b.deleted).length };
   }

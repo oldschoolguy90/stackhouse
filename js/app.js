@@ -28,6 +28,10 @@ const Nav = (() => {
       $("isbndb-alert-backdrop").classList.remove("active");
       return true;
     }
+    if ($("ocr-view").classList.contains("active")) {
+      closeOcr();
+      return true;
+    }
     if ($("scanner-view").classList.contains("active")) {
       closeScanner();
       return true;
@@ -80,6 +84,7 @@ async function init() {
   wireIsbndbSettings();
   wireIsbndbAlert();
   wireScanner();
+  wireOcr();
   wireBookSheet();
   wireManualAdd();
   wireDropboxSetup();
@@ -485,6 +490,11 @@ function wireScanner() {
                            coverUrl: "", found: false }, true);
     }
   });
+  $("scanner-ocr-btn").addEventListener("click", async () => {
+    await Scanner.stop();
+    $("scanner-view").classList.remove("active");
+    openOcr();
+  });
   $("scan-result-close").addEventListener("click", () => $("scan-result-backdrop").classList.remove("active"));
 }
 
@@ -500,6 +510,7 @@ async function openScanner(mode) {
     : "Point your camera at the barcode";
   $("scanner-manual-btn").textContent = mode === "checkout" ? "Pick from a list instead" : "Enter manually instead";
   $("scanner-manual-btn").style.display = mode === "bulk" ? "none" : "block";
+  $("scanner-ocr-btn").style.display = "none";
   $("scanner-view").classList.add("active");
   await Scanner.start("qr-reader", onCodeScanned, () => {
     $("scanner-status").textContent = "Camera unavailable — check permissions in your browser settings.";
@@ -527,8 +538,9 @@ async function closeScanner() {
 
 async function onCodeScanned(code, isBook) {
   if (!isBook) {
-    // Not a Bookland EAN-13 — likely a price add-on, UPC, or a misread.
-    $("scanner-status").textContent = "That's not a book barcode — line up the main barcode (starts 978/979).";
+    // Not a Bookland EAN-13 — likely a UPC, price add-on, or misread.
+    $("scanner-status").textContent = "Not a book barcode — line up the 978/979 barcode, or scan the printed ISBN below.";
+    $("scanner-ocr-btn").style.display = "block";   // offer OCR as the way out
     if (navigator.vibrate) navigator.vibrate(60);
     return;
   }
@@ -873,8 +885,34 @@ function openBookSheet(id) {
 }
 
 // ---------- MANUAL ADD (from settings) ----------
+async function runManualLookup() {
+  const raw = $("ma-isbn").value.trim();
+  const norm = ISBN.normalize(raw);
+  const status = $("ma-lookup-status");
+  if (!raw) { status.textContent = "Enter an ISBN first."; return; }
+  if (!norm.valid) {
+    status.innerHTML = `<span style="color:var(--rust);">That doesn't look like a valid ISBN (checksum failed) — check for a mistyped digit. You can still save it as-is.</span>`;
+    return;
+  }
+  status.textContent = "Looking it up…";
+  let info = null;
+  try { info = await BookAPI.lookup(norm.isbn13); } catch (_) {}
+  if (info && info.isbndbError) noteIsbndbError(info.isbndbError);
+  if (info && (info.title || info.author)) {
+    $("ma-title").value = info.title || "";
+    $("ma-author").value = info.author || "";
+    if (info.seriesName) $("ma-series").value = info.seriesName;
+    if (info.seriesPosition) $("ma-position").value = info.seriesPosition;
+    status.innerHTML = `<span style="color:var(--sage);">Found via ${info.source || "online"} — check and edit, then Add.</span>`;
+  } else {
+    status.innerHTML = `<span style="color:var(--rust);">Valid ISBN, but no match online. Fill in the details by hand.</span>`;
+  }
+}
+
 function wireManualAdd() {
   $("manual-add-close").addEventListener("click", () => $("manual-add-backdrop").classList.remove("active"));
+  $("ma-lookup").addEventListener("click", runManualLookup);
+  $("ma-ocr").addEventListener("click", () => openOcr());
   $("ma-save").addEventListener("click", async () => {
     const isbn = $("ma-isbn").value.trim();
     const title = $("ma-title").value.trim();
@@ -900,6 +938,66 @@ function wireManualAdd() {
     $("manual-add-backdrop").classList.remove("active");
     maybeAutoSync();
   });
+}
+
+// ---------- OCR: read the printed ISBN when there's no scannable book barcode ----------
+let ocrStream = null;
+
+async function openOcr() {
+  $("manual-add-backdrop").classList.remove("active");
+  $("ocr-status").textContent = "Fill the box with the “ISBN …” line, then Capture";
+  $("ocr-view").classList.add("active");
+  try {
+    ocrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    const v = $("ocr-video");
+    v.srcObject = ocrStream;
+    await v.play();
+  } catch (_) {
+    $("ocr-status").textContent = "Camera unavailable — check permissions, or type the ISBN by hand.";
+  }
+}
+
+function closeOcr() {
+  if (ocrStream) { ocrStream.getTracks().forEach((t) => t.stop()); ocrStream = null; }
+  $("ocr-view").classList.remove("active");
+}
+
+async function captureOcr() {
+  const v = $("ocr-video");
+  if (!v.videoWidth) { $("ocr-status").textContent = "Camera still starting — try again in a second."; return; }
+  // crop to the framed strip (middle band) to cut noise
+  const cw = v.videoWidth, ch = v.videoHeight;
+  const cropH = Math.floor(ch * 0.18), cropY = Math.floor((ch - cropH) / 2);
+  const cropX = Math.floor(cw * 0.08), cropW = Math.floor(cw * 0.84);
+  const canvas = document.createElement("canvas");
+  canvas.width = cropW; canvas.height = cropH;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(v, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  $("ocr-status").innerHTML = `<span class="spinner"></span>Reading…`;
+  try {
+    const { data } = await Tesseract.recognize(canvas, "eng", {
+      tessedit_char_whitelist: "0123456789Xx-ISBN ",
+    });
+    const found = ISBN.extractFromText(data.text || "");
+    closeOcr();
+    // open the manual form with whatever we read, ready to correct + look up
+    $("manual-add-backdrop").classList.add("active");
+    $("ma-isbn").value = found.isbn || "";
+    if (found.valid) {
+      $("ma-lookup-status").textContent = "Read an ISBN — looking it up…";
+      await runManualLookup();
+    } else {
+      $("ma-lookup-status").innerHTML = `<span style="color:var(--rust);">Read “${escapeHTML(found.isbn || "nothing")}” but couldn't confirm it. Fix any wrong digit and tap Look up.</span>`;
+    }
+  } catch (_) {
+    $("ocr-status").textContent = "Couldn't read it — try again with steadier light, or type it in.";
+  }
+}
+
+function wireOcr() {
+  $("ocr-close").addEventListener("click", () => { closeOcr(); $("manual-add-backdrop").classList.add("active"); });
+  $("ocr-capture").addEventListener("click", captureOcr);
 }
 
 // ---------- DROPBOX SETUP SHEET ----------

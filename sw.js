@@ -1,4 +1,4 @@
-const CACHE = "stackhouse-v7";
+const CACHE = "stackhouse-v9";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const ASSETS = [
   "./js/db.js",
   "./js/api.js",
   "./js/scanner.js",
+  "./js/isbn.js",
   "./js/dropbox.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png"

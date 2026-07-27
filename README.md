@@ -48,10 +48,12 @@ write the same `library.json` file in your Dropbox app folder.
 There's no live push between devices — each device pulls the latest data on
 open, merges in anything scanned locally, and pushes the merged result back,
 automatically after every scan and every 60 seconds while the app is open.
-Because almost every action here is "add a book" or "flip a checked-out
-flag," two devices editing the *same* book at the *exact* same moment is
-the only real conflict case, and it's resolved by simply keeping whichever
-change happened last.
+Alongside the `library.json` data file, the app also writes a **`library.csv`**
+to the same Dropbox app folder on every sync — open it in Excel or Google
+Sheets for a plain list view of your whole library (title, author, series,
+ISBN, who has it checked out, duplicate/review flags, date added). It's
+export-only: edit it for your own reference, but changes there aren't read
+back into the app.
 
 ## Using it
 
